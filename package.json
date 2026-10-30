@@ -1,0 +1,23 @@
+{
+  "name": "cf-tmdb",
+  "version": "2.0.0",
+  "description": "TMDB Proxy service for Cloudflare Workers",
+  "main": "worker.js",
+  "scripts": {
+    "deploy": "wrangler deploy",
+    "dev": "wrangler dev",
+    "tail": "wrangler tail"
+  },
+  "keywords": [
+    "tmdb",
+    "proxy",
+    "cloudflare",
+    "workers",
+    "api"
+  ],
+  "author": "qqcomeup",
+  "license": "MIT",
+  "devDependencies": {
+    "wrangler": "^3.0.0"
+  }
+}
