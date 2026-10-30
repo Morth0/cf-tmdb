@@ -4,8 +4,11 @@
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    const pathname = url.pathname;
+    let pathname = url.pathname;
     const search = url.search;
+    // 兼容客户端把 /3 写重复（/3/3/...）或省略（/configuration、/movie/...）的情况
+    if (pathname.startsWith('/3/3/')) pathname = pathname.slice(2);
+    else if (/^\/(configuration|movie|tv|search|person|discover|trending|genre|account|collection|company|credit|episode|find|keyword|list|network|review|season)\b/.test(pathname)) pathname = '/3' + pathname;
 
     // CORS 头部
     const corsHeaders = {
@@ -29,10 +32,13 @@ export default {
       return new Response(null, { status: 200, headers: corsHeaders });
     }
 
-    // 从请求中获取API Key
-    const API_KEY = request.headers.get('X-API-Key') || 
-                   url.searchParams.get('api_key') || 
-                   url.searchParams.get('key');
+    // 从请求中获取API Key：兼容 X-API-Key、?api_key=、?key=，以及 Bearer Token（TMDB v4）
+    const authHeader = request.headers.get('Authorization') || '';
+    const isBearer = authHeader.toLowerCase().startsWith('bearer ');
+    const API_KEY = isBearer ? authHeader.slice(7).trim()
+                   : (request.headers.get('X-API-Key') ||
+                      url.searchParams.get('api_key') ||
+                      url.searchParams.get('key'));
 
     // 增强安全检查
     const userAgent = request.headers.get('User-Agent') || '';
@@ -139,28 +145,29 @@ export default {
 
     // API代理 /3/*
     if (pathname.startsWith('/3/')) {
-      // 检查是否提供了API Key
+      // API 路径缺 Key 时返回 JSON 而不是伪装 404 网页，否则客户端按 JSON 解析会报 DATA PARSE
       if (!API_KEY) {
-        return new Response(getFake404HTML(), {
-          status: 404,
-          headers: { 'Content-Type': 'text/html; charset=utf-8', ...corsHeaders },
+        return new Response(JSON.stringify({ success: false, status_code: 7, status_message: 'API key required' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json', ...corsHeaders },
         });
       }
 
       try {
         let apiUrl = `https://api.tmdb.org${pathname}${search}`;
 
-        if (!search.includes('api_key=')) {
+        // Bearer Token（v4）按 Bearer 原样转发给 TMDB；v3 Key 才拼成 api_key 参数
+        const upstreamHeaders = { 'Accept': 'application/json' };
+        if (isBearer) {
+          upstreamHeaders['Authorization'] = `Bearer ${API_KEY}`;
+        } else if (!search.includes('api_key=')) {
           const separator = search ? '&' : '?';
           apiUrl += `${separator}api_key=${API_KEY}`;
         }
 
         const response = await fetch(apiUrl, {
           method: request.method,
-          headers: { 
-            'Accept': 'application/json',
-            'Accept-Encoding': 'gzip, deflate, br'
-          },
+          headers: upstreamHeaders,
           cf: {
             cacheTtl: 300, // 5分钟缓存
             cacheEverything: true,
@@ -184,13 +191,13 @@ export default {
           }
         }
 
+        // 注意：response.text() 已解码，不再原样回传上游的 Content-Encoding，
+        // 否则客户端按 gzip 解压一段明文会直接解析失败
         return new Response(responseText, {
           status: response.status,
           headers: {
             'Content-Type': 'application/json',
             'Cache-Control': `public, max-age=${cacheTime}`,
-            'Content-Encoding': response.headers.get('Content-Encoding'),
-            'Vary': 'Accept-Encoding',
             ...corsHeaders,
           },
         });
